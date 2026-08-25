@@ -9,6 +9,8 @@
   "minimum_basement_version": "0.5.0",
   "minimum_launcher_version": "1.1.5",
   "sequence": 1,
-  "source_archive": "publisher/input/OMA_Phase5_Publish_Runtime_0_5_0.zip",
-  "source_archive_sha256": "d59dc25f89a34280060489737e524aeced01eeafed9146b27dd3794bd711dbfc"
+  "source_archive_sha256": "d59dc25f89a34280060489737e524aeced01eeafed9146b27dd3794bd711dbfc",
+  "source_manifest": "source/source-manifest.json",
+  "source_ref": "main",
+  "source_repository": "viodennisschundiak-hub/OMA-GrandMAKI-Source"
 }
