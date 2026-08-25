@@ -1,0 +1,255 @@
+name: OMA – signiertes Stable-Update veröffentlichen
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 3 * * *"
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/publish-signed-update.yml"
+      - "publisher/release.json"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: oma-signed-stable-publication
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Repository auschecken
+        uses: actions/checkout@v4
+
+      - name: Freigabedaten validieren
+        id: release
+        run: |
+          python3 - <<'PY'
+          import json, os, re
+          from pathlib import Path
+
+          cfg = json.loads(Path("publisher/release.json").read_text(encoding="utf-8"))
+          required = {
+              "bridge_version", "bundle_name", "channel",
+              "expected_bridge_build_sha256", "expected_launcher_tree_sha256",
+              "key_id", "launcher_version", "minimum_basement_version",
+              "minimum_launcher_version", "sequence", "source_archive_sha256",
+              "source_manifest", "source_ref", "source_repository",
+          }
+          if set(cfg) != required:
+              raise SystemExit(f"Ungültige release.json-Felder: {sorted(set(cfg) ^ required)}")
+          semver = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")
+          for name in ("bridge_version", "launcher_version", "minimum_basement_version", "minimum_launcher_version"):
+              if not semver.fullmatch(cfg[name]):
+                  raise SystemExit(f"Ungültige SemVer in {name}")
+          if cfg["channel"] not in {"stable", "beta"}:
+              raise SystemExit("Ungültiger Kanal")
+          if not isinstance(cfg["sequence"], int) or isinstance(cfg["sequence"], bool) or cfg["sequence"] < 1:
+              raise SystemExit("Ungültige Sequenz")
+          if not re.fullmatch(r"[A-Za-z0-9._-]+\.zip", cfg["bundle_name"]):
+              raise SystemExit("Unsicherer Bundle-Dateiname")
+          for name in (
+              "expected_bridge_build_sha256",
+              "expected_launcher_tree_sha256",
+              "source_archive_sha256",
+          ):
+              if not re.fullmatch(r"[0-9a-f]{64}", cfg[name]):
+                  raise SystemExit(f"Ungültiger SHA-256 in {name}")
+          if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", cfg["source_repository"]):
+              raise SystemExit("Ungültiges privates Quellrepository")
+          if not re.fullmatch(r"[A-Za-z0-9._/-]+", cfg["source_ref"]):
+              raise SystemExit("Ungültige Quellreferenz")
+          manifest = Path(cfg["source_manifest"])
+          if manifest.is_absolute() or ".." in manifest.parts or manifest.suffix != ".json":
+              raise SystemExit("Unsicherer Quellmanifest-Pfad")
+          with Path(os.environ["GITHUB_OUTPUT"]).open("a", encoding="utf-8") as out:
+              for key, value in cfg.items():
+                  out.write(f"{key}={value}\n")
+          PY
+
+      - name: Privaten OMA-Quellstand auschecken
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ steps.release.outputs.source_repository }}
+          ref: ${{ steps.release.outputs.source_ref }}
+          token: ${{ secrets.OMA_PRIVATE_SOURCE_TOKEN }}
+          path: private-source
+          persist-credentials: false
+
+      - name: Ephemeren Signierkontext erstellen
+        env:
+          OMA_SIGNING_SEED_B64: ${{ secrets.OMA_UPDATE_SIGNING_SEED_B64 }}
+        run: |
+          python3 - <<'PY'
+          import base64, hmac, json, os, sys
+          from datetime import UTC, datetime
+          from pathlib import Path
+
+          sys.path.insert(0, "tools")
+          from oma_update_publisher import _public_key
+
+          encoded = os.environ.get("OMA_SIGNING_SEED_B64", "")
+          try:
+              seed = base64.b64decode(encoded, validate=True)
+          except Exception as exc:
+              raise SystemExit("GitHub-Secret ist kein gültiges Base64") from exc
+          if len(seed) != 32:
+              raise SystemExit("GitHub-Secret muss exakt 32 Byte dekodieren")
+          cfg = json.loads(Path("publisher/release.json").read_text(encoding="utf-8"))
+          trusted = json.loads(Path("public/trusted_update_keys.json").read_text(encoding="utf-8"))
+          actual_public = base64.b64encode(_public_key(seed)).decode("ascii")
+          expected_public = trusted.get(cfg["key_id"], "")
+          if not hmac.compare_digest(actual_public, expected_public):
+              raise SystemExit("GitHub-Secret passt nicht zum veröffentlichten Prüfschlüssel")
+          private_path = Path(os.environ["RUNNER_TEMP"]) / "oma-signing.private.json"
+          flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+          descriptor = os.open(private_path, flags, 0o600)
+          with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+              json.dump({
+                  "schema_version": 1,
+                  "algorithm": "Ed25519",
+                  "key_id": cfg["key_id"],
+                  "seed_base64": encoded,
+                  "created_at": datetime.now(UTC).isoformat(),
+                  "handling": "EPHEMERAL_GITHUB_ACTIONS_SECRET",
+              }, handle)
+          PY
+
+      - name: Privaten Quellstand reproduzierbar zusammensetzen
+        id: source
+        run: |
+          python3 - <<'PY'
+          import base64, hashlib, json, os, re
+          from pathlib import Path
+
+          cfg = json.loads(Path("publisher/release.json").read_text(encoding="utf-8"))
+          private_root = Path("private-source").resolve()
+          manifest_path = (private_root / cfg["source_manifest"]).resolve()
+          if private_root not in manifest_path.parents or not manifest_path.is_file():
+              raise SystemExit("Privates Quellmanifest fehlt oder verlässt das Repository")
+          manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+          required = {
+              "schema_version", "release", "launcher_version", "archive_name",
+              "archive_sha256", "bridge_tree_sha256", "launcher_tree_sha256",
+              "encoding", "parts",
+          }
+          if set(manifest) != required or manifest["schema_version"] != 1:
+              raise SystemExit("Ungültiges privates Quellmanifest")
+          if manifest["encoding"] != "base64-concatenated":
+              raise SystemExit("Nicht unterstützte Quellarchiv-Kodierung")
+          if manifest["release"] != cfg["bridge_version"] or manifest["launcher_version"] != cfg["launcher_version"]:
+              raise SystemExit("Quellmanifest-Version passt nicht zur Freigabe")
+          if manifest["bridge_tree_sha256"] != cfg["expected_bridge_build_sha256"]:
+              raise SystemExit("Bridge-Quellhash passt nicht zur Freigabe")
+          if manifest["launcher_tree_sha256"] != cfg["expected_launcher_tree_sha256"]:
+              raise SystemExit("Launcher-Quellhash passt nicht zur Freigabe")
+          if manifest["archive_sha256"] != cfg["source_archive_sha256"]:
+              raise SystemExit("Quellarchiv-Hash passt nicht zur Freigabe")
+          if not re.fullmatch(r"[A-Za-z0-9._-]+\.zip", manifest["archive_name"]):
+              raise SystemExit("Unsicherer Quellarchiv-Dateiname")
+          if not isinstance(manifest["parts"], list) or not manifest["parts"]:
+              raise SystemExit("Quellmanifest enthält keine Teile")
+          encoded_parts = []
+          for index, entry in enumerate(manifest["parts"]):
+              if set(entry) != {"path", "sha256"} or not re.fullmatch(r"[0-9a-f]{64}", entry["sha256"]):
+                  raise SystemExit(f"Ungültiger Quellteil {index}")
+              part = (private_root / entry["path"]).resolve()
+              if private_root not in part.parents or not part.is_file():
+                  raise SystemExit(f"Quellteil {index} fehlt oder verlässt das Repository")
+              raw = part.read_bytes()
+              if hashlib.sha256(raw).hexdigest() != entry["sha256"]:
+                  raise SystemExit(f"Quellteil {index} hat eine falsche Prüfsumme")
+              encoded_parts.append(raw.decode("ascii").strip())
+          try:
+              payload = base64.b64decode(
+                  "".join(encoded_parts),
+                  validate=True,
+              )
+          except Exception as exc:
+              raise SystemExit("Quellarchiv-Teile enthalten ungültiges Base64") from exc
+          actual = hashlib.sha256(payload).hexdigest()
+          if actual != manifest["archive_sha256"]:
+              raise SystemExit(
+                  f"Quellarchiv-Prüfsumme stimmt nicht: erwartet {manifest['archive_sha256']}, erhalten {actual}"
+              )
+          source = Path("build/input") / manifest["archive_name"]
+          source.parent.mkdir(parents=True, exist_ok=True)
+          source.write_bytes(payload)
+          with Path(os.environ["GITHUB_OUTPUT"]).open("a", encoding="utf-8") as out:
+              out.write(f"archive={source.as_posix()}\n")
+          PY
+
+      - name: Koordinierten Quellstand entpacken
+        run: |
+          mkdir -p build/source build/published
+          python3 -m zipfile -e "${{ steps.source.outputs.archive }}" build/source
+
+      - name: Bridge und Launcher gemeinsam signieren
+        run: |
+          python3 tools/oma_update_publisher.py build-bundle \
+            --seed-file "$RUNNER_TEMP/oma-signing.private.json" \
+            --key-id "${{ steps.release.outputs.key_id }}" \
+            --bridge-root build/source/bridge \
+            --launcher-root build/source/launcher \
+            --release-version "${{ steps.release.outputs.bridge_version }}" \
+            --launcher-version "${{ steps.release.outputs.launcher_version }}" \
+            --minimum-basement-version "${{ steps.release.outputs.minimum_basement_version }}" \
+            --minimum-launcher-version "${{ steps.release.outputs.minimum_launcher_version }}" \
+            --channel "${{ steps.release.outputs.channel }}" \
+            --sequence "${{ steps.release.outputs.sequence }}" \
+            --expires-days 365 \
+            --output "build/published/${{ steps.release.outputs.bundle_name }}"
+
+      - name: Signierten HTTPS-Kanal erzeugen
+        run: |
+          python3 tools/oma_update_publisher.py build-channel \
+            --seed-file "$RUNNER_TEMP/oma-signing.private.json" \
+            --key-id "${{ steps.release.outputs.key_id }}" \
+            --bundle "build/published/${{ steps.release.outputs.bundle_name }}" \
+            --bundle-url "https://raw.githubusercontent.com/${{ github.repository }}/main/stable/${{ steps.release.outputs.bundle_name }}" \
+            --version "${{ steps.release.outputs.bridge_version }}" \
+            --channel "${{ steps.release.outputs.channel }}" \
+            --sequence "${{ steps.release.outputs.sequence }}" \
+            --expires-days 14 \
+            --output build/published/channel.json
+
+      - name: Veröffentlichung vollständig gegenprüfen
+        run: |
+          python3 tools/verify_publication.py \
+            --channel build/published/channel.json \
+            --bundle "build/published/${{ steps.release.outputs.bundle_name }}" \
+            --trusted-keys public/trusted_update_keys.json \
+            --release-config publisher/release.json \
+            --bridge-root build/source/bridge \
+            --launcher-root build/source/launcher
+
+      - name: Ephemeren Signierkontext entfernen
+        if: always()
+        run: |
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          path = Path(os.environ["RUNNER_TEMP"]) / "oma-signing.private.json"
+          if path.exists():
+              path.write_bytes(b"\x00" * path.stat().st_size)
+              path.unlink()
+          PY
+
+      - name: Signierte Dateien atomar veröffentlichen
+        run: |
+          mkdir -p stable
+          cp "build/published/${{ steps.release.outputs.bundle_name }}" stable/
+          cp build/published/channel.json stable/channel.json
+          git config user.name "OMA Update Publisher"
+          git config user.email "actions@users.noreply.github.com"
+          git add stable/channel.json "stable/${{ steps.release.outputs.bundle_name }}"
+          if git diff --cached --quiet; then
+            echo "Signierter Kanal ist bereits aktuell."
+          else
+            git commit -m "Veröffentliche signiertes OMA-Update Sequenz ${{ steps.release.outputs.sequence }}"
+            git push
+          fi
