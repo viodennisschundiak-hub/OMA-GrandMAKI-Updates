@@ -1,0 +1,13 @@
+{
+  "bridge_version": "0.5.0",
+  "bundle_name": "OMA_GrandMAKI_Update_0_5_0_seq1.zip",
+  "channel": "stable",
+  "expected_bridge_build_sha256": "ebfdc00db22b5fdf24d67c9afb09d78dfa3403e6bc3fd5feca4300f4015b71bc",
+  "expected_launcher_tree_sha256": "b72cf98652fac6e166955db72eb2f632d9ed9e725eff8990439745c54e397feb",
+  "key_id": "oma-prod-2026-01",
+  "launcher_version": "1.2.0",
+  "minimum_basement_version": "0.5.0",
+  "minimum_launcher_version": "1.1.5",
+  "sequence": 1,
+  "source_archive": "publisher/input/OMA_Phase5_Publish_Source_0_5_0.zip"
+}
