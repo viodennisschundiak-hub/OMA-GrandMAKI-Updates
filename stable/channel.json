@@ -1,11 +1,11 @@
 {
   "channel": "stable",
-  "expires_at": "2026-09-09T00:14:29+00:00",
-  "issued_at": "2026-08-26T00:14:29+00:00",
+  "expires_at": "2026-09-09T04:01:13+00:00",
+  "issued_at": "2026-08-26T04:01:13+00:00",
   "product": "oma-update-channel",
   "release": {
-    "bundle_sha256": "10d4ddab98b16350d6a0926a90b691e7e6d30d0046ea92f5cb883d169976eb8a",
-    "bundle_size_bytes": 545194,
+    "bundle_sha256": "4cc3fbdd096f7df19a89e7ba7c2403838ae286a5797a8ace9835ecbc07b97e23",
+    "bundle_size_bytes": 545191,
     "bundle_url": "https://raw.githubusercontent.com/viodennisschundiak-hub/OMA-GrandMAKI-Updates/main/stable/OMA_GrandMAKI_Update_0_5_2_seq3.zip",
     "version": "0.5.2"
   },
@@ -15,7 +15,7 @@
     {
       "algorithm": "Ed25519",
       "key_id": "oma-prod-2026-01",
-      "signature": "NwS7yUprKeaj+lUuqBiYY0vW1pJr6e3+t3P/g4TtX1QUGJG0aH1RzzZ5vVOWf0IjVMhB7aQUnrqR4jWlnxAvBg=="
+      "signature": "1fp4wNRS0fVyQPWiiuXNZBmQjZQJmxNJDc5OPzWe139kv2Ky5uFTHKZU6LO8jkRRU5YNl9IVKBY/p6vwJ5X1Cg=="
     }
   ]
 }
