@@ -9,6 +9,7 @@ from pathlib import Path
 
 from oma_basement.hashing import calculate_bridge_build_sha256, calculate_launcher_tree_sha256
 from oma_basement.update_crypto import verify_signed_document
+from verify_release_binding import verify_release_binding
 
 
 def sha256(path: Path) -> str:
@@ -31,6 +32,11 @@ def main() -> int:
 
     trusted = json.loads(args.trusted_keys.read_text(encoding="utf-8-sig"))
     config = json.loads(args.release_config.read_text(encoding="utf-8-sig"))
+    binding = verify_release_binding(
+        config=config,
+        bridge_root=args.bridge_root,
+        launcher_root=args.launcher_root,
+    )
     channel_document = json.loads(args.channel.read_text(encoding="utf-8-sig"))
     channel = verify_signed_document(channel_document, trusted)["payload"]
     if channel.get("product") != "oma-update-channel" or channel.get("sequence") != config["sequence"]:
@@ -50,7 +56,8 @@ def main() -> int:
         if not any(name.startswith("launcher/") and not name.endswith("/") for name in names):
             raise RuntimeError("Launcher-Quellbaum fehlt im Bundle.")
         manifest_document = json.loads(archive.read("OMA_UPDATE_MANIFEST.json").decode("utf-8-sig"))
-    manifest = verify_signed_document(manifest_document, trusted)["payload"]
+    manifest_verification = verify_signed_document(manifest_document, trusted)
+    manifest = manifest_verification["payload"]
     if manifest.get("schema_version") != 2 or manifest.get("product") != "oma-grandmaki-suite":
         raise RuntimeError("Bundle ist kein koordiniertes Suite-Update.")
     if manifest.get("sequence") != config["sequence"]:
@@ -67,7 +74,11 @@ def main() -> int:
         raise RuntimeError("Signierter Launcher-Hash stimmt nicht.")
     print(json.dumps({
         "ok": True,
-        "verified_key_ids": verify_signed_document(manifest_document, trusted)["verified_key_ids"],
+        "release_binding_verified": binding["ok"],
+        "runtime_bridge_version": binding["runtime_bridge_version"],
+        "launcher_version": binding["launcher_version"],
+        "sequence": binding["sequence"],
+        "verified_key_ids": manifest_verification["verified_key_ids"],
         "bundle_sha256": sha256(args.bundle),
         "bridge_build_sha256": bridge_hash,
         "launcher_tree_sha256": launcher_hash,
