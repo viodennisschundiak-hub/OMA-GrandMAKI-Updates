@@ -2,8 +2,6 @@ name: OMA – signiertes Stable-Update veröffentlichen
 
 on:
   workflow_dispatch:
-  schedule:
-    - cron: "17 3 * * *"
   push:
     branches: [main]
     paths:
@@ -29,7 +27,7 @@ jobs:
         id: release
         run: |
           python3 - <<'PY'
-          import json, os, re
+          import hashlib, json, os, re
           from pathlib import Path
 
           cfg = json.loads(Path("publisher/release.json").read_text(encoding="utf-8"))
@@ -37,13 +35,17 @@ jobs:
               "bridge_version", "bundle_name", "channel",
               "expected_bridge_build_sha256", "expected_launcher_tree_sha256",
               "key_id", "launcher_version", "minimum_basement_version",
-              "minimum_launcher_version", "sequence", "source_archive_sha256",
+              "minimum_launcher_version", "recovery_cmd_path", "recovery_cmd_sha256",
+              "runtime_bridge_version", "sequence", "source_archive_sha256",
               "source_manifest", "source_ref", "source_repository",
           }
           if set(cfg) != required:
               raise SystemExit(f"Ungültige release.json-Felder: {sorted(set(cfg) ^ required)}")
           semver = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")
-          for name in ("bridge_version", "launcher_version", "minimum_basement_version", "minimum_launcher_version"):
+          for name in (
+              "bridge_version", "runtime_bridge_version", "launcher_version",
+              "minimum_basement_version", "minimum_launcher_version",
+          ):
               if not semver.fullmatch(cfg[name]):
                   raise SystemExit(f"Ungültige SemVer in {name}")
           if cfg["channel"] not in {"stable", "beta"}:
@@ -56,19 +58,54 @@ jobs:
               "expected_bridge_build_sha256",
               "expected_launcher_tree_sha256",
               "source_archive_sha256",
+              "recovery_cmd_sha256",
           ):
               if not re.fullmatch(r"[0-9a-f]{64}", cfg[name]):
                   raise SystemExit(f"Ungültiger SHA-256 in {name}")
           if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", cfg["source_repository"]):
               raise SystemExit("Ungültiges privates Quellrepository")
-          if not re.fullmatch(r"[A-Za-z0-9._/-]+", cfg["source_ref"]):
-              raise SystemExit("Ungültige Quellreferenz")
+          if not re.fullmatch(r"[0-9a-f]{40}", cfg["source_ref"]):
+              raise SystemExit("Quellreferenz muss ein unveränderlicher 40-stelliger Commit-SHA sein")
           manifest = Path(cfg["source_manifest"])
           if manifest.is_absolute() or ".." in manifest.parts or manifest.suffix != ".json":
               raise SystemExit("Unsicherer Quellmanifest-Pfad")
+          recovery = Path(cfg["recovery_cmd_path"])
+          if recovery.is_absolute() or ".." in recovery.parts or recovery.suffix.casefold() != ".cmd":
+              raise SystemExit("Unsicherer Recovery-CMD-Pfad")
+          if not recovery.is_file():
+              raise SystemExit("Recovery-CMD fehlt")
+          if hashlib.sha256(recovery.read_bytes()).hexdigest() != cfg["recovery_cmd_sha256"]:
+              raise SystemExit("Recovery-CMD-Hash stimmt nicht mit der Freigabe überein")
           with Path(os.environ["GITHUB_OUTPUT"]).open("a", encoding="utf-8") as out:
               for key, value in cfg.items():
                   out.write(f"{key}={value}\n")
+          PY
+
+      - name: Monotone Stable-Sequenz fail-closed prüfen
+        run: |
+          python3 - <<'PY'
+          import json, sys
+          from pathlib import Path
+
+          sys.path.insert(0, "tools")
+          from oma_basement.update_crypto import verify_signed_document
+
+          cfg = json.loads(Path("publisher/release.json").read_text(encoding="utf-8"))
+          channel_path = Path("stable/channel.json")
+          if not channel_path.is_file():
+              raise SystemExit("Bestehender Stable-Kanal fehlt")
+          trusted = json.loads(Path("public/trusted_update_keys.json").read_text(encoding="utf-8"))
+          current_document = json.loads(channel_path.read_text(encoding="utf-8"))
+          current = verify_signed_document(current_document, trusted)["payload"]
+          if current.get("product") != "oma-update-channel" or current.get("channel") != "stable":
+              raise SystemExit("Bestehender Stable-Kanal ist ungültig")
+          current_sequence = current.get("sequence")
+          if not isinstance(current_sequence, int) or isinstance(current_sequence, bool):
+              raise SystemExit("Bestehende Stable-Sequenz ist ungültig")
+          if cfg["sequence"] <= current_sequence:
+              raise SystemExit(
+                  f"Anti-Rollback: neue Sequenz {cfg['sequence']} ist nicht höher als Stable {current_sequence}"
+              )
           PY
 
       - name: Privaten OMA-Quellstand auschecken
@@ -188,6 +225,13 @@ jobs:
           mkdir -p build/source build/published
           python3 -m zipfile -e "${{ steps.source.outputs.archive }}" build/source
 
+      - name: Quell- und Launcherbindung fail-closed prüfen
+        run: |
+          python3 tools/verify_release_binding.py \
+            --release-config publisher/release.json \
+            --bridge-root build/source/bridge \
+            --launcher-root build/source/launcher
+
       - name: Bridge und Launcher gemeinsam signieren
         run: |
           python3 tools/oma_update_publisher.py build-bundle \
@@ -253,3 +297,4 @@ jobs:
             git commit -m "Veröffentliche signiertes OMA-Update Sequenz ${{ steps.release.outputs.sequence }}"
             git push
           fi
+
