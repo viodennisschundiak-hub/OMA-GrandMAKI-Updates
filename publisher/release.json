@@ -1,16 +1,16 @@
 {
-  "bridge_version": "0.5.10",
-  "bundle_name": "OMA_GrandMAKI_Update_0_5_10_seq14.zip",
+  "bridge_version": "0.5.11",
+  "bundle_name": "OMA_GrandMAKI_Update_0_5_11_seq15.zip",
   "channel": "stable",
-  "expected_bridge_build_sha256": "2e0008af78860521032852083888448b1e44c044f0f0d6290f3125aa5fea0aa5",
+  "expected_bridge_build_sha256": "b3f9ac99dca36dc9646242b33455544b96a849f1a0a55a6e1406c4b9da545ef8",
   "expected_launcher_tree_sha256": "2fe7a950eb462973de1a125d16ebba3c597d570603ee6876c27be45f68b2395d",
   "key_id": "oma-prod-2026-01",
   "launcher_version": "1.2.12",
   "minimum_basement_version": "0.5.0",
   "minimum_launcher_version": "1.1.5",
-  "sequence": 14,
-  "source_archive_sha256": "b8e4b02872434fb861af92d38ef5321c232a7ae276971a9f547158e6cedd87f2",
+  "sequence": 15,
+  "source_archive_sha256": "1aef241c1a69e82e673b74fc5ccbedbb875cbed2507b95c9612e4c2ec5748ca1",
   "source_manifest": "source/source-manifest.json",
-  "source_ref": "main",
+  "source_ref": "5f51c60215794d2f6670e61646137d23df351738",
   "source_repository": "viodennisschundiak-hub/OMA-GrandMAKI-Source"
 }
